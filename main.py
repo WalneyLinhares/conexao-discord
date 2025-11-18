@@ -1,14 +1,13 @@
 import os
 import asyncio
-import json
 from datetime import datetime
+import pytz
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import discord
 from discord.ext import commands
 import uvicorn
 from dotenv import load_dotenv
-from zoneinfo import ZoneInfo
 
 # ------------------ CARREGAR VARIÁVEIS DE AMBIENTE ------------------
 load_dotenv()
@@ -21,24 +20,9 @@ GIF_URL = "https://cdn.discordapp.com/attachments/1303772458762895480/1424811285
 UPDATE_INTERVAL = 180
 API_KEY = os.getenv("API_KEY")
 
-MESSAGE_ID_FILE = "message_id.json"
 MESSAGE_ID = None
 LAST_UPDATE = 0
 PENDING_DATA = None  # Guarda o último dado recebido
-
-# ------------------ FUNÇÕES DE PERSISTÊNCIA ------------------
-def save_message_id(msg_id):
-    with open(MESSAGE_ID_FILE, "w") as f:
-        json.dump({"id": msg_id}, f)
-
-def load_message_id():
-    global MESSAGE_ID
-    try:
-        with open(MESSAGE_ID_FILE, "r") as f:
-            data = json.load(f)
-            MESSAGE_ID = data.get("id")
-    except FileNotFoundError:
-        MESSAGE_ID = None
 
 # ------------------ CONFIGURAÇÃO DO BOT ------------------
 intents = discord.Intents.default()
@@ -57,7 +41,6 @@ app.add_middleware(
 @app.post("/update-room")
 async def update_room(request: Request):
     global PENDING_DATA
-    # Verificar a API Key
     key = request.headers.get("x-api-key")
     if key != API_KEY:
         return {"error": "Unauthorized"}, 401
@@ -68,7 +51,6 @@ async def update_room(request: Request):
     if not room_name or user_count is None:
         return {"error": "Dados inválidos"}, 400
 
-    # Guarda os dados para atualizar periodicamente
     PENDING_DATA = {"room_name": room_name, "user_count": user_count}
     print(PENDING_DATA)
     return {"status": "ok"}
@@ -82,8 +64,21 @@ async def update_embed_periodically():
         print("Canal não encontrado!")
         return
 
-    load_message_id()
     print(f"Iniciando loop de atualização no canal: {channel.name} ({CHANNEL_ID})")
+
+    # Tentar encontrar a última mensagem do bot no canal
+    try:
+        messages = [m async for m in channel.history(limit=10)]
+        msg = next((m for m in messages if m.author == bot.user), None)
+        if msg:
+            MESSAGE_ID = msg.id
+            print(f"Mensagem existente encontrada: {MESSAGE_ID}")
+        else:
+            MESSAGE_ID = None
+            print("Nenhuma mensagem existente encontrada, irá criar nova quando necessário.")
+    except Exception as e:
+        print("Erro ao buscar histórico de mensagens:", e)
+        MESSAGE_ID = None
 
     while not bot.is_closed():
         now = datetime.now().timestamp()
@@ -110,50 +105,45 @@ async def update_embed_periodically():
 
                 view = discord.ui.View()
                 view.add_item(discord.ui.Button(
-                label="QUARTO",
-                url=ROOM_LINK,
-                style=discord.ButtonStyle.link
+                    label="QUARTO",
+                    url=ROOM_LINK,
+                    style=discord.ButtonStyle.link
                 ))
-
                 view.add_item(discord.ui.Button(
-                label="💎 VIP",
-                url="https://discord.com/channels/1186736897544945828/1211844747241586748",
-                style=discord.ButtonStyle.link
+                    label="💎 VIP",
+                    url="https://discord.com/channels/1186736897544945828/1211844747241586748",
+                    style=discord.ButtonStyle.link
                 ))
+                embed.set_footer(
+                    text=f"🕔{datetime.now(pytz.timezone("America/Sao_Paulo")).strftime('%d/%m/%Y - %H:%M')}"
+                )
 
-                embed.set_footer(text=f"🕔{datetime.now(ZoneInfo("America/Sao_Paulo")).strftime('%d/%m/%Y - %H:%M')}")
-
-                if MESSAGE_ID is None:
-                    msg = await channel.send(embed=embed, view=view)
-                    MESSAGE_ID = msg.id
-                    save_message_id(MESSAGE_ID)
-                    print(f"Mensagem enviada: {MESSAGE_ID}")
-                else:
+                if MESSAGE_ID:
                     try:
                         msg = await channel.fetch_message(MESSAGE_ID)
                         await msg.edit(embed=embed, view=view)
                         print("Mensagem atualizada")
                     except discord.errors.NotFound:
-                        # Se a mensagem foi deletada, enviar nova
                         msg = await channel.send(embed=embed, view=view)
                         MESSAGE_ID = msg.id
-                        save_message_id(MESSAGE_ID)
                         print("Mensagem anterior não encontrada. Nova mensagem enviada.")
+                else:
+                    msg = await channel.send(embed=embed, view=view)
+                    MESSAGE_ID = msg.id
+                    print(f"Mensagem enviada: {MESSAGE_ID}")
 
                 LAST_UPDATE = now
             except Exception as e:
                 print("Erro ao atualizar embed:", e)
 
-        await asyncio.sleep(5)  # verifica a cada 5 segundos se há atualização
+        await asyncio.sleep(5)
 
 # ------------------ FUNÇÃO PRINCIPAL ------------------
 async def main():
-    # Cria task do FastAPI
+    # Cria tasks do FastAPI e do bot
     config = uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="info")
     server = uvicorn.Server(config)
     api_task = asyncio.create_task(server.serve())
-
-    # Cria task de atualização do embed
     update_task = asyncio.create_task(update_embed_periodically())
 
     # Inicia o bot
