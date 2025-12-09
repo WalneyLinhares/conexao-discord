@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from dotenv import load_dotenv
-import requests
+import aiohttp
 
 # --- Importações DISCORD.PY E UI ---
 import discord
@@ -105,7 +105,7 @@ class RoomStatusView(ui.LayoutView):
 # ==========================================================
 # 4. LOOP DE ATUALIZAÇÃO
 # ==========================================================
-@tasks.loop(seconds=5) 
+@tasks.loop(seconds=15) 
 async def update_components_periodically():
     global MESSAGE_ID, LAST_UPDATE, PENDING_DATA
     
@@ -165,7 +165,7 @@ async def hourly_everyone_ping():
         return
 
     try:
-        msg = await channel.send("@everyone ⏰ Atualização automática feita.")
+        msg = await channel.send("@everyone ⏰")
         await asyncio.sleep(1)
         await msg.delete()
         print("[BOT] Aviso horário enviado e apagado.")
@@ -174,7 +174,7 @@ async def hourly_everyone_ping():
 
 
 # ==========================================================
-# 🔥 4.2 — LOOP QUE PINGA O RENDER AUTOMATICAMENTE
+# 4.2 — LOOP QUE PINGA O RENDER AUTOMATICAMENTE
 # ==========================================================
 @tasks.loop(minutes=5)
 async def ping_render_wake():
@@ -185,8 +185,10 @@ async def ping_render_wake():
         return
 
     try:
-        r = requests.get(WAKE_URL, timeout=5)
-        print(f"[WAKE] Ping enviado {r.text}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(WAKE_URL) as resp:
+                text = await resp.text()
+                print(f"[WAKE] Ping enviado {text}")
     except Exception as e:
         print(f"[WAKE ERRO] {e}")
 
@@ -219,6 +221,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ROTA UPDATE-ROOM
 @app.post("/update-room")
 async def update_room(request: Request):
     global PENDING_DATA, LAST_UPDATE
@@ -238,6 +241,14 @@ async def update_room(request: Request):
 
     print("[API] Dados recebidos:", PENDING_DATA)
     return {"status": "ok"}
+
+
+# ROTA WAKE
+@app.api_route("/wake", methods=["GET", "POST"])
+async def wake():
+    print("[FASTAPI] alive")
+    return {"status": "alive"}
+
 
 
 # ==========================================================
