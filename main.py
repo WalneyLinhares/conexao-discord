@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from dotenv import load_dotenv
+import requests
 
 # --- Importações DISCORD.PY E UI ---
 import discord
@@ -38,16 +39,19 @@ VIP_URL = "https://discord.com/channels/1186736897544945828/1211844747241586748"
 THUMBNAIL_URL = "https://cdn.discordapp.com/attachments/1303772458762895480/1447735970358231143/Material_wave_loading.gif"
 
 
+WAKE_URL = os.getenv("WAKE_URL")
+
+
 # ==========================================================
 # 2. CONFIGURAÇÃO DO BOT DISCORD.PY
 # ==========================================================
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents) 
 
+
 # ==========================================================
 # 3. CONSTRUTOR DE COMPONENTS V2
 # ==========================================================
-
 class RoomStatusView(ui.LayoutView):
     def __init__(self, room_name: str, user_count: int, current_time: str):
         super().__init__(timeout=None)
@@ -63,7 +67,7 @@ class RoomStatusView(ui.LayoutView):
 
         section_room_link = ui.Section(
             ui.TextDisplay(
-                content=f"```fix\n🔗 {ROOM_LINK}\n```"
+                content=f"```fix\n{ROOM_LINK}\n```"
             ),
             accessory=ui.Button(
                 style=discord.ButtonStyle.link,
@@ -97,7 +101,7 @@ class RoomStatusView(ui.LayoutView):
 
         self.add_item(container)
 
-        
+
 # ==========================================================
 # 4. LOOP DE ATUALIZAÇÃO
 # ==========================================================
@@ -169,7 +173,27 @@ async def hourly_everyone_ping():
         print(f"[ERRO HOURLY] {e}")
 
 
-# --- Eventos do Bot ---
+# ==========================================================
+# 🔥 4.2 — LOOP QUE PINGA O RENDER AUTOMATICAMENTE
+# ==========================================================
+@tasks.loop(minutes=5)
+async def ping_render_wake():
+    await bot.wait_until_ready()
+
+    if not WAKE_URL:
+        print("[WAKE] Nenhuma WAKE_URL configurada.")
+        return
+
+    try:
+        r = requests.get(WAKE_URL, timeout=5)
+        print(f"[WAKE] Ping enviado {r.text}")
+    except Exception as e:
+        print(f"[WAKE ERRO] {e}")
+
+
+# ==========================================================
+# EVENTO ON_READY
+# ==========================================================
 @bot.event
 async def on_ready():
     print(f"Bot {bot.user} conectado e pronto. ID: {bot.user.id}")
@@ -179,6 +203,9 @@ async def on_ready():
 
     if not hourly_everyone_ping.is_running():
         hourly_everyone_ping.start()
+
+    if not ping_render_wake.is_running():
+        ping_render_wake.start()
 
 
 # ==========================================================
@@ -216,7 +243,6 @@ async def update_room(request: Request):
 # ==========================================================
 # 6. EXECUÇÃO
 # ==========================================================
-
 async def run_discord_bot():
     try:
         await bot.start(TOKEN)

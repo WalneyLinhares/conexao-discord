@@ -3,3 +3,4 @@ uvicorn
 discord.py
 python-dotenv
 pytz
+requests
