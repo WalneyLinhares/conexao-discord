@@ -4,6 +4,10 @@ from datetime import datetime
 import pytz
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi.responses import PlainTextResponse
 import uvicorn
 from dotenv import load_dotenv
 import aiohttp
@@ -24,12 +28,12 @@ try:
     CHANNEL_ID: int = int(os.getenv("CHANNEL_ID"))
 except (TypeError, ValueError):
     CHANNEL_ID: int = 0
-    
+
 PORT: int = int(os.getenv("PORT", 8000))
 API_KEY: str = os.getenv("API_KEY")
 
 ROOM_LINK = "https://www.habblet.city/room/6065930"
-UPDATE_INTERVAL = 180
+UPDATE_INTERVAL = 180  # segundos (3 minutos)
 
 MESSAGE_ID: int | None = None 
 LAST_UPDATE: float = 0
@@ -38,16 +42,13 @@ SAO_PAULO_TZ = pytz.timezone('America/Sao_Paulo')
 VIP_URL = "https://discord.com/channels/1186736897544945828/1211844747241586748"
 THUMBNAIL_URL = "https://cdn.discordapp.com/attachments/1303772458762895480/1447735970358231143/Material_wave_loading.gif"
 
-
 WAKE_URL = os.getenv("WAKE_URL")
-
 
 # ==========================================================
 # 2. CONFIGURAÇÃO DO BOT DISCORD.PY
 # ==========================================================
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents) 
-
 
 # ==========================================================
 # 3. CONSTRUTOR DE COMPONENTS V2
@@ -78,10 +79,7 @@ class RoomStatusView(ui.LayoutView):
         container.add_item(section_room_link)
 
         container.add_item(ui.Separator())
-
-        container.add_item(
-            ui.TextDisplay(content="🔗 Links rápidos")
-        )
+        container.add_item(ui.TextDisplay(content="🔗 Links rápidos"))
 
         container.add_item(
             ui.ActionRow(
@@ -94,38 +92,34 @@ class RoomStatusView(ui.LayoutView):
         )
 
         container.add_item(ui.Separator())
-
-        container.add_item(
-            ui.TextDisplay(content=f"*🕒 {current_time}*")  
-        )
-
+        container.add_item(ui.TextDisplay(content=f"*🕒 {current_time}*"))
         self.add_item(container)
-
 
 # ==========================================================
 # 4. LOOP DE ATUALIZAÇÃO
 # ==========================================================
-@tasks.loop(seconds=15) 
+@tasks.loop(seconds=15)
 async def update_components_periodically():
     global MESSAGE_ID, LAST_UPDATE, PENDING_DATA
-    
+
     await bot.wait_until_ready()
     channel: discord.TextChannel = bot.get_channel(CHANNEL_ID)
-
     if channel is None:
         return
 
+    # Busca a mensagem existente se ainda não temos o ID
     if MESSAGE_ID is None:
         try:
-            async for msg in channel.history(limit=20):
+            async for msg in channel.history(limit=50):
                 if msg.author.id == bot.user.id:
                     MESSAGE_ID = msg.id
                     break
         except Exception:
             pass
-             
+
     now = datetime.now().timestamp()
     
+    # Atualiza apenas se houver dados pendentes e tempo mínimo atingido
     if PENDING_DATA and (now - LAST_UPDATE >= UPDATE_INTERVAL):
         try:
             room_name = PENDING_DATA["room_name"]
@@ -144,7 +138,7 @@ async def update_components_periodically():
                 print("[BOT] Nova mensagem LayoutView enviada.")
             
             LAST_UPDATE = now
-            PENDING_DATA = None 
+            PENDING_DATA = None
 
         except discord.NotFound:
             MESSAGE_ID = None
@@ -152,18 +146,15 @@ async def update_components_periodically():
         except Exception as e:
             print(f"[ERRO FATAL] ao atualizar Mensagem Discord: {e}")
 
-
 # ==========================================================
 # 4.1 LOOP — AVISO COM @EVERYONE A CADA 1 HORA
 # ==========================================================
 @tasks.loop(hours=1)
 async def hourly_everyone_ping():
     await bot.wait_until_ready()
-
     channel: discord.TextChannel = bot.get_channel(CHANNEL_ID)
     if channel is None:
         return
-
     try:
         msg = await channel.send("@everyone ⏰")
         await asyncio.sleep(1)
@@ -172,18 +163,15 @@ async def hourly_everyone_ping():
     except Exception as e:
         print(f"[ERRO HOURLY] {e}")
 
-
 # ==========================================================
-# 4.2 — LOOP QUE PINGA O RENDER AUTOMATICAMENTE
+# 4.2 LOOP QUE PINGA O RENDER AUTOMATICAMENTE
 # ==========================================================
 @tasks.loop(minutes=5)
 async def ping_render_wake():
     await bot.wait_until_ready()
-
     if not WAKE_URL:
         print("[WAKE] Nenhuma WAKE_URL configurada.")
         return
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(WAKE_URL) as resp:
@@ -192,28 +180,26 @@ async def ping_render_wake():
     except Exception as e:
         print(f"[WAKE ERRO] {e}")
 
-
 # ==========================================================
 # EVENTO ON_READY
 # ==========================================================
 @bot.event
 async def on_ready():
     print(f"Bot {bot.user} conectado e pronto. ID: {bot.user.id}")
-    
     if not update_components_periodically.is_running():
         update_components_periodically.start()
-
     if not hourly_everyone_ping.is_running():
         hourly_everyone_ping.start()
-
     if not ping_render_wake.is_running():
         ping_render_wake.start()
 
-
 # ==========================================================
-# 5. FASTAPI + ENDPOINT
+# 5. FASTAPI + ENDPOINT COM RATE LIMITING
 # ==========================================================
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
+app.state.limiter = limiter
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -221,10 +207,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ROTA UPDATE-ROOM
+@app.exception_handler(RateLimitExceeded)
+async def ratelimit_handler(request, exc):
+    return PlainTextResponse("Too Many Requests", status_code=429)
+
 @app.post("/update-room")
+@limiter.limit("5/minute")
 async def update_room(request: Request):
-    global PENDING_DATA, LAST_UPDATE
+    global PENDING_DATA
     key = request.headers.get("x-api-key")
     if key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -232,24 +222,18 @@ async def update_room(request: Request):
     data = await request.json()
     room_name = data.get("roomName")
     user_count = data.get("userCount")
-
     if not room_name or user_count is None:
         raise HTTPException(status_code=400, detail="Invalid data")
 
     PENDING_DATA = {"room_name": room_name, "user_count": user_count}
-    LAST_UPDATE = 0
-
     print("[API] Dados recebidos:", PENDING_DATA)
     return {"status": "ok"}
 
 
-# ROTA WAKE
 @app.api_route("/wake", methods=["GET", "POST"])
 async def wake():
     print("[FASTAPI] alive")
     return {"status": "alive"}
-
-
 
 # ==========================================================
 # 6. EXECUÇÃO
