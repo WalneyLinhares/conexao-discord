@@ -1,7 +1,7 @@
 import os
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import pytz
 import aiohttp
@@ -57,12 +57,12 @@ logger = logging.getLogger("bot-pro")
 # -------------------------
 # ESTADO GLOBAL
 # -------------------------
-MESSAGE_ID: Optional[int] = None         # ID da mensagem sendo editada
-LAST_UPDATE: float = 0                   # timestamp da última atualização
-PENDING_DATA: Optional[dict] = None      # dados recebidos pendentes (sempre vence o mais novo)
-PENDING_LOCK = asyncio.Lock()            # trava para proteger acesso ao PENDING_DATA
-MESSAGE_ID_LOCK = asyncio.Lock()         # trava para proteger acesso ao MESSAGE_ID
-BACKOFF_STATE = {"wait_until": 0.0}      # estado do backoff (tempo até liberar tentativas)
+MESSAGE_ID: Optional[int] = None 
+LAST_UPDATE: float = 0 
+PENDING_DATA: Optional[dict] = None 
+PENDING_LOCK = asyncio.Lock() 
+MESSAGE_ID_LOCK = asyncio.Lock() 
+BACKOFF_STATE = {"wait_until": 0.0}
 
 # -------------------------
 # CONFIGURAÇÃO DO BOT DO DISCORD
@@ -71,7 +71,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, case_insensitive=True)
 
-# sessão aiohttp criada depois (em on_ready)
+# Atributo iniciado sem anotação direta para evitar erro de Type Annotation em execução
 bot.http_session = None
 
 # -------------------------
@@ -88,12 +88,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# handler para RateLimitExceeded
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return PlainTextResponse("Too Many Requests", status_code=429)
 
-# utilidade: salvar message_id em arquivo
 def _save_message_id(path: str, message_id: Optional[int]):
     try:
         if message_id is None:
@@ -105,7 +103,6 @@ def _save_message_id(path: str, message_id: Optional[int]):
     except Exception as e:
         logger.warning("Não foi possível salvar o message_id: %s", e)
 
-# utilidade: carregar message_id persistido
 def _load_message_id(path: str) -> Optional[int]:
     try:
         if os.path.exists(path):
@@ -138,7 +135,11 @@ async def update_room(request: Request):
         raise HTTPException(status_code=400, detail="Invalid data")
 
     async with PENDING_LOCK:
-        PENDING_DATA = {"room_name": str(room_name), "user_count": int(user_count), "received_at": datetime.utcnow().isoformat()}
+        PENDING_DATA = {
+            "room_name": str(room_name), 
+            "user_count": int(user_count), 
+            "received_at": datetime.now(timezone.utc).isoformat()
+        }
         logger.debug("PENDING_DATA atualizado: %s", PENDING_DATA)
 
     return {"status": "ok"}
@@ -201,7 +202,6 @@ async def _get_or_create_message(channel: discord.TextChannel) -> discord.Messag
         return placeholder
 
 def _is_in_backoff() -> bool:
-    """Retorna True se ainda estiver no período de backoff."""
     now = asyncio.get_event_loop().time()
     return now < BACKOFF_STATE.get("wait_until", 0.0)
 
@@ -381,7 +381,11 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        async def start():
+            async with bot:
+                await main()
+
+        asyncio.run(start())
     except KeyboardInterrupt:
         logger.info("Encerramento solicitado pelo usuário.")
     except Exception as e:
