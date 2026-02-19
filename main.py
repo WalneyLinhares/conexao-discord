@@ -338,8 +338,8 @@ async def on_ready():
 
     if not update_components_periodically.is_running():
         update_components_periodically.start()
-    if not hourly_everyone_ping.is_running():
-        hourly_everyone_ping.start()
+    # if not hourly_everyone_ping.is_running():
+    #     hourly_everyone_ping.start()
     if not ping_render_wake.is_running():
         ping_render_wake.start()
 
