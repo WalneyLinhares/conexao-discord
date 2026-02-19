@@ -286,19 +286,19 @@ async def update_components_periodically():
 # -------------------------
 # PING DE HORÁRIO
 # -------------------------
-@tasks.loop(hours=1)
-async def hourly_everyone_ping():
-    await bot.wait_until_ready()
-    try:
-        channel = bot.get_channel(CHANNEL_ID)
-        if channel is None:
-            return
-        msg = await channel.send("@everyone ⏰ Atualização automática feita.")
-        await asyncio.sleep(1)
-        await msg.delete()
-        logger.info("Ping horário enviado e apagado.")
-    except Exception as e:
-        logger.exception("Erro no hourly ping: %s", e)
+# @tasks.loop(hours=1)
+# async def hourly_everyone_ping():
+#     await bot.wait_until_ready()
+#     try:
+#         channel = bot.get_channel(CHANNEL_ID)
+#         if channel is None:
+#             return
+#         msg = await channel.send("@everyone ⏰ Atualização automática feita.")
+#         await asyncio.sleep(1)
+#         await msg.delete()
+#         logger.info("Ping horário enviado e apagado.")
+#     except Exception as e:
+#         logger.exception("Erro no hourly ping: %s", e)
 
 # -------------------------
 # LOOP DE WAKE (MANTÉM OUTRO SERVIDOR ACORDADO)
